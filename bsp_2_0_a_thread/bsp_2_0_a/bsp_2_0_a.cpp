@@ -188,6 +188,7 @@ DWORD WINAPI target_control_thread_proc(void)
 
 		switch(input) {
 			case 'q':
+				void(dp_exit();
 				ende = 1;
 				break;
 			case '1':
