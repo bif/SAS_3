@@ -13,6 +13,9 @@
 #include <windows.h>
 #include <stdio.h>
 
+#define MAX_SEM_COUNT 1
+
+bool master_wants = FALSE;
 DPR_STRING *pCP_Name="CP_L2_1:";		// Logischer Name des CP
 DPR_STRING *pDatabase= NULL;			// Pfad und Name der Datenbasis (NULL Default)
 DP_ERROR_T  ErrStruct;				// Details zur Fehlerursache
@@ -23,6 +26,11 @@ DPR_DWORD  DPUserHandle;			// User Handle für Anwenderprogramm
 DPR_CP5613_DP_T volatile *pDPRam;		// Zugriff auf Dual Ported RAM
 DPR_BYTE old_mode;
 DPR_BYTE DP_Data[2];				// Nutzdaten
+
+//Semaphores
+HANDLE dp_write_semaphore;
+HANDLE gotoxy_semaphore;
+
 
 void gotoxy(int xpos, int ypos)
 {
@@ -137,10 +145,37 @@ void dp_read(void)
 }
 void dp_write(void)
 {
-	/* Daten kopieren */
-	memcpy((void*)&(pDPRam->pi.slave_out[1].data[0]), &DP_Data[0], 2);
-	/* Übertragung anstoßen */		
-	pDPRam->ctr.D_out_slave_adr = 1;
+	DWORD wait_for_sem;
+	bool sem_dp_write_continue;
+
+	sem_dp_write_continue = TRUE;
+	while(sem_dp_write_continue)
+	{
+		wait_for_sem =	WaitForSingleObject( 
+						dp_write_semaphore,   // handle to semaphore
+						0L);				// zero-second time-out interval
+		switch (wait_for_sem) 
+		{ 
+			// The semaphore object was signaled.
+			case WAIT_OBJECT_0: 				
+				/* Daten kopieren */
+				memcpy((void*)&(pDPRam->pi.slave_out[1].data[0]), &DP_Data[0], 2);
+				/* Übertragung anstoßen */		
+				pDPRam->ctr.D_out_slave_adr = 1;
+				
+				sem_dp_write_continue = FALSE;
+				if (!ReleaseSemaphore( 
+                     dp_write_semaphore,	// handle to semaphore
+                       1,					// increase count by one
+                       NULL) )				// not interested in previous count
+				{
+					printf("ReleaseSemaphore error: %d\n", GetLastError());
+				}
+				break;
+			case WAIT_TIMEOUT:
+				break;
+		}
+	}
 }
 
 
@@ -164,11 +199,47 @@ void dp_exit(void)
 
 DWORD WINAPI life_byte_thread_proc(void)
 {
+	DWORD dwWaitResult;
+	bool semContinue;
+
 	while(1)
-	{
-		DP_Data[1] = DP_Data[1]++;
-		gotoxy(0,7);
-		printf("Life Byte: %X", DP_Data[1]);
+	{	
+		if(master_wants == FALSE)
+		{
+			semContinue = TRUE;
+			while(semContinue)
+			{
+				dwWaitResult =	WaitForSingleObject( 
+								gotoxy_semaphore,   // handle to semaphore
+								0L);				// zero-second time-out interval
+				switch (dwWaitResult) 
+				{ 
+					// The semaphore object was signaled.
+					case WAIT_OBJECT_0: 	
+						DP_Data[1] = DP_Data[1]++;
+						gotoxy(0,7);
+						printf("Life Byte: %X", DP_Data[1]);
+						gotoxy(0,9);
+
+						semContinue = FALSE;	
+						if (!ReleaseSemaphore( 
+							 gotoxy_semaphore,	// handle to semaphore
+							 1,					// increase count by one
+							 NULL) )				// not interested in previous count
+						{
+							printf("ReleaseSemaphore error: %d\n", GetLastError());
+						}
+						break;
+					case WAIT_TIMEOUT:
+						break;
+				}
+			}
+			(void)dp_write();
+		}
+		else
+		{
+			while(master_wants == TRUE);
+		}
 	}
 	return 1;
 }
@@ -176,19 +247,51 @@ DWORD WINAPI life_byte_thread_proc(void)
 
 DWORD WINAPI target_control_thread_proc(void)
 {
+	DWORD dwWaitResult;
+	bool semContinue;
     char input = ' ';
 	bool ende = 0;
 	int count = 0;
 
 	while(ende == 0) {
-		(void)dp_read();
-		gotoxy(0,8);
-		printf("Switch Stellung: %X", DP_Data[0]);
-		std::cin >> input;
 
-		switch(input) {
+		(void)dp_read();
+
+		semContinue = TRUE;
+		while(semContinue)
+		{
+			dwWaitResult =	WaitForSingleObject( 
+							gotoxy_semaphore,   // handle to semaphore
+							0L);				// zero-second time-out interval
+			switch (dwWaitResult) 
+			{ 
+				// The semaphore object was signaled.
+				case WAIT_OBJECT_0: 	
+					gotoxy(0,8);
+					printf("Switch Stellung: %X", DP_Data[0]);
+					gotoxy(0,9);
+					
+					semContinue = FALSE;
+					if (!ReleaseSemaphore( 
+                        gotoxy_semaphore,	// handle to semaphore
+                        1,					// increase count by one
+                        NULL) )				// not interested in previous count
+					{
+						printf("ReleaseSemaphore error: %d\n", GetLastError());
+					}
+					break;
+
+				case WAIT_TIMEOUT:
+					break;
+			}
+		}
+
+		std::cin >> input;
+		
+		switch(input)
+		{
 			case 'q':
-				void(dp_exit();
+				(void)dp_exit();
 				ende = 1;
 				break;
 			case '1':
@@ -201,7 +304,9 @@ DWORD WINAPI target_control_thread_proc(void)
 					else {
 						DP_Data[0] = 0x00;
 					}
+					master_wants = TRUE;
 					(void)dp_write();
+					master_wants = FALSE;
 					count = count++;
 					Sleep(10);
 					if(count < 1000) {
@@ -212,11 +317,15 @@ DWORD WINAPI target_control_thread_proc(void)
 				break;
 			case 'd':
 				DP_Data[0] = 0x01;
+				master_wants = TRUE;
 				(void)dp_write();
+				master_wants = FALSE;
 				break;
 			case 'u':
 				DP_Data[0] = 0x00;
+				master_wants = TRUE;
 				(void)dp_write();
+				master_wants = FALSE;
 				break;
 			default:
 				break;
@@ -236,6 +345,32 @@ int _tmain(int argc, _TCHAR* argv[])
 	{
 		DP_Data[1] = 0x00;
 
+		// Create a semaphore with initial and max counts of MAX_SEM_COUNT
+		gotoxy_semaphore =	CreateSemaphore( 
+							NULL,           // default security attributes
+							MAX_SEM_COUNT,  // initial count
+							MAX_SEM_COUNT,  // maximum count
+							NULL);          // unnamed semaphore
+
+		if (gotoxy_semaphore == NULL) 
+		{
+			printf("CreateSemaphore error: %d\n", GetLastError());
+			return -1;
+		}
+
+		// Create a semaphore with initial and max counts of MAX_SEM_COUNT
+		dp_write_semaphore =	CreateSemaphore( 
+								NULL,           // default security attributes
+								MAX_SEM_COUNT,  // initial count
+								MAX_SEM_COUNT,  // maximum count
+								NULL);          // unnamed semaphore
+
+		if (dp_write_semaphore == NULL) 
+		{
+			printf("CreateSemaphore error: %d\n", GetLastError());
+			return -1;
+		}
+
 		// start life-byte counter thread
 		life_byte_thread =	CreateThread( 
 							NULL,       // default security attributes
@@ -248,7 +383,7 @@ int _tmain(int argc, _TCHAR* argv[])
 		 if(life_byte_thread == NULL )
 		 {
 			 printf("CreateThread error: %d\n", GetLastError());
-			 return 0;
+			 return  -1;
 		 }
 
 		target_control_thread = CreateThread(
@@ -262,7 +397,7 @@ int _tmain(int argc, _TCHAR* argv[])
 		if(target_control_thread == NULL )
 		{
 			printf("CreateThread error: %d\n", GetLastError());
-			return 0;
+			return -1;
 		}
 
 		WaitForSingleObjectEx(target_control_thread, INFINITE, TRUE);
