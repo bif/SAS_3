@@ -156,6 +156,7 @@ void dp_read(int address)
 void dp_write(bool target_control_or_dvm)
 {
 	DPR_WORD dvm_value;
+	int dvm_print_value = 0;
 
 	if(target_control_or_dvm)
 	{
@@ -169,13 +170,22 @@ void dp_write(bool target_control_or_dvm)
 		if(encoder <= enc_max && encoder >= enc_min)
 		{
 			dvm_value = (DPR_WORD)(((encoder-enc_min)*0xD80)/(enc_max-enc_min));
+			dvm_print_value = (DPR_WORD)(((encoder-enc_min)*10)/(enc_max-enc_min));
 		}
 		else
+		{
 			dvm_value = 0;
+			dvm_print_value = 0;
+		}
 		gotoxy(0,9);
-		printf("Encoder :                    ");
+		printf("Encoder DVM Wert:                      ");
 		gotoxy(0,9);
-		printf("Encoder : %X\n", dvm_value);
+		printf("Encoder DVM Wert: %i Volt \n", dvm_print_value);
+		gotoxy(0,10);
+		printf("Encoder Wert:                      ");
+		gotoxy(0,10);
+		printf("Encoder Wert: %i \n", encoder);
+
 		dvm_value = _byteswap_ushort(dvm_value);
 		/* Daten kopieren */
 		memcpy((void*)&(pDPRam->pi.slave_out[1].data[2]), &dvm_value, 2);
@@ -301,7 +311,7 @@ WORD WINAPI target_control_thread_proc(void)
 		}
 			
 		(void)dp_write(1);
-		//Sleep(10);
+		
 	}
 	return 1;
 }
