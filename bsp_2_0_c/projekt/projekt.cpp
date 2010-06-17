@@ -22,6 +22,8 @@ DPR_BYTE DP_Data[4];				// Nutzdaten
 
 unsigned int encoder = 0, enc_max = 256000, enc_min = 4400;
 
+//Semaphores
+DPR_DWORD DP_target_control_semaphore;
 
 void gotoxy(int xpos, int ypos)
 {
@@ -202,101 +204,144 @@ void dp_exit(void)
 
 
 
+
+
+
+WORD WINAPI target_control_thread_proc(void)
+{
+	int motor_control = 0;
+
+	RetErrClass = DP_init_sema_object(DPUserHandle, DP_OBJECT_TYPE_INPUT_CHANGE, &DP_target_control_semaphore, &ErrStruct);
+	if(RetErrClass != DP_OK)
+	{
+		(void)DP_get_err_txt(&ErrStruct, pErrLanguage, ErrorText);
+		printf("%s\n",ErrorText);
+		return -1;
+	}
+
+	while(1)
+	{
+		//reset event mask
+		pDPRam->ef.input[1].req_mask = DPR_DATA_INT_CLEAR_AND_UNMASK;
+		//wait for target semaphore
+		WaitForSingleObject((HANDLE)DP_target_control_semaphore, INFINITE);
+
+		(void)dp_read(1);
+/* Motor Control */	
+
+		switch(motor_control)
+		{
+			case 0:
+				switch(DP_Data[0])
+				{
+					case 1:
+						// UP
+						motor_control = 1;
+						DP_Data[0] = 0x40;
+						break;
+					case 4:
+						// DOWN
+						motor_control = 2;
+						DP_Data[0] = 0xC0;
+						break;
+					case 2:
+						// STOP
+						motor_control = 0;
+						DP_Data[0] = 0;
+						break;
+					case 65:
+						//UP wenn MagE_D = 1
+						motor_control = 1;
+						DP_Data[0] = 0x40;
+						break;
+					case 132:
+						//DOWN wenn MagE_U = 1
+						motor_control = 2;
+						DP_Data[0] = 0xC0;
+						break;
+					default:
+						// STOP
+						motor_control = 0;
+						DP_Data[0] = 0;
+						break;
+				}
+				break;
+			case 1:
+				if(DP_Data[0] > 0x0F)
+				{
+					motor_control = 0;
+				}
+				else if((DP_Data[0] & 0x0F) == 2)
+				{
+					motor_control = 0;
+					DP_Data[0] = 0;
+				}
+				else
+				{
+						DP_Data[0] = 0x40;
+				}
+				break;
+			case 2:
+				if(DP_Data[0] > 0x0F)
+				{
+					motor_control = 0;
+				}
+				else if((DP_Data[0] & 0x0F) == 2)
+				{
+					motor_control = 0;
+					DP_Data[0] = 0;
+				}
+				else
+				{
+					DP_Data[0] = 0xC0;
+				}
+				break;
+			default:
+				break;
+		}
+			
+		(void)dp_write(1);
+		//Sleep(10);
+	}
+	return 1;
+}
+
 int _tmain(int argc, _TCHAR* argv[])
 {
     char input = ' ';
 	bool ende = 0;
-	int motor_control = 0;
-
+	HANDLE target_control_thread;
+    DWORD ThreadID;
 
 	if(dp_init() == 0)
 	{
+		target_control_thread = CreateThread(
+								NULL,       // default security attributes
+								0,          // default stack size
+								(LPTHREAD_START_ROUTINE) target_control_thread_proc, 
+								NULL,       // no thread function arguments
+								0,          // default creation flags
+								&ThreadID); // receive thread identifier
+
+		if(target_control_thread == NULL )
+		{
+			printf("CreateThread error: %d\n", GetLastError());
+			return -1;
+		}
 
 		while(ende == 0)
 		{
-			
+			if (!ReleaseSemaphore( 
+                (HANDLE)DP_target_control_semaphore,	// handle to semaphore
+                1,										// increase count by one
+                NULL) )									// not interested in previous count
+			{
+				printf("ReleaseSemaphore error: %d\n", GetLastError());
+			}
 			(void)dp_read(55);
 			(void)dp_write(0);
-
-			(void)dp_read(1);
-		
-
-			switch(motor_control)
-			{
-				case 0:
-					switch(DP_Data[0])
-					{
-						case 1:
-							// UP
-							motor_control = 1;
-							DP_Data[0] = 0x40;
-							break;
-						case 4:
-							// DOWN
-							motor_control = 2;
-							DP_Data[0] = 0xC0;
-							break;
-						case 2:
-							// STOP
-							motor_control = 0;
-							DP_Data[0] = 0;
-							break;
-						case 65:
-							//UP wenn MagE_D = 1
-							motor_control = 1;
-							DP_Data[0] = 0x40;
-							break;
-						case 132:
-							//DOWN wenn MagE_U = 1
-							motor_control = 2;
-							DP_Data[0] = 0xC0;
-							break;
-						default:
-							// STOP
-							motor_control = 0;
-							DP_Data[0] = 0;
-							break;
-					}
-					break;
-				case 1:
-					if(DP_Data[0] > 0x0F)
-					{
-						motor_control = 0;
-					}
-					else if((DP_Data[0] & 0x0F) == 2)
-					{
-						motor_control = 0;
-						DP_Data[0] = 0;
-					}
-					else
-					{
-							DP_Data[0] = 0x40;
-					}
-					break;
-				case 2:
-					if(DP_Data[0] > 0x0F)
-					{
-						motor_control = 0;
-					}
-					else if((DP_Data[0] & 0x0F) == 2)
-					{
-						motor_control = 0;
-						DP_Data[0] = 0;
-					}
-					else
-					{
-						DP_Data[0] = 0xC0;
-					}
-					break;
-				default:
-					break;
-			}
-				
-
-			(void)dp_write(1);
 			Sleep(10);
 
-			
 			if(kbhit())
 			{
 				input = getch();
@@ -321,12 +366,21 @@ int _tmain(int argc, _TCHAR* argv[])
 			input = ' ';
 			
 		}
-		
+		//close target-control thread
+		CloseHandle(target_control_thread);
+
+		// Close Semaphores
+		CloseHandle((HANDLE)DP_target_control_semaphore);
 
 		return 0;
 	}
 	else
 	{
+		//close target-control thread
+		CloseHandle(target_control_thread);
+
+		// Close Semaphores
+		CloseHandle((HANDLE)DP_target_control_semaphore);
 		return -1;
 	}
 }
