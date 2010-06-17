@@ -1,4 +1,4 @@
-// Polling.cpp : Defines the entry point for the console application.
+/// Polling.cpp : Defines the entry point for the console application.
 //
 
 // Sensor/Aktor Systeme LU

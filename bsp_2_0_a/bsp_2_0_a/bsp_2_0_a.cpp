@@ -15,6 +15,7 @@
 #include <conio.h>
 
 
+
 HANDLE gotoxy_semaphore;
 
 void gotoxy(int xpos, int ypos)
